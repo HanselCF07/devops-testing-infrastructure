@@ -1,0 +1,244 @@
+// RUN WITH UBUNTU SERVER 24
+
+# Update packages
+    sudo apt update && sudo apt upgrade -y
+
+# Install basic utilities
+    sudo apt install -y curl wget git vim net-tools htop
+
+
+
+// Activate Firewall
+
+# Install/activate the firewall: 
+    sudo ufw enable
+
+# Open the port: (Remember to add the ports you will configure and test later)
+    sudo ufw allow 8000/tcp
+
+# Verify:
+    sudo ufw status
+
+
+
+// Enable SSH (Optional - It may be more comfortable to configure your server externally)
+
+# Install OpenSSH server:
+    sudo apt install openssh-server
+
+# Verify SSH service status:
+    sudo systemctl status ssh
+
+# Enable and start the service (if not already running):
+    sudo systemctl enable --now ssh
+
+# Configure Firewall (UFW):
+    sudo ufw allow ssh
+    127.0.1.1 server-name
+
+# Install Avahi (optional but recommended):
+# So other devices (Windows, Mac, Linux) recognize it automatically
+    sudo apt install avahi-daemon
+
+# test DNS
+    ping server-name
+
+
+
+// Configure a local DNS (Optional)
+
+# Change server hostname
+    sudo hostnamectl set-hostname vg-hc-store
+
+# Update hosts file
+    sudo nano /etc/hosts
+
+
+
+// Install Docker
+
+# Install dependencies
+    sudo apt install -y ca-certificates curl gnupg lsb-release
+
+# Add official Docker repository
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker.gpg] \
+    https://download.docker.com/linux/ubuntu $(ls_release -cs) stable" \
+    | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker and Compose
+    sudo apt update
+    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Enable Docker
+    sudo systemctl enable docker
+    sudo systemctl start Docker
+
+# Add your user to the docker group:
+    sudo usermod -aG docker $USER
+
+# Apply group changes to the current session:
+    newgrp docker
+
+# Verify that your user has access to the socket:
+    ls -l /var/run/docker.sock
+
+# Test running Docker without sudo:
+    docker run hello-world
+
+
+
+// Install Kubernetes
+
+# Install kubectl
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+# Install Minikube
+    curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+    sudo install minikube-linux-amd64 /usr/local/bin/minikube
+
+# Start local cluster
+    minikube start --driver=Docker
+
+
+
+// Install Nginx
+
+    sudo apt install -y nginx
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
+
+
+# Remember to modify the nginx configuration to send requests to the cluster's Ingress server.
+# cd ./etc/nginx/sites-enabled   create file: reverse-proxy.config   
+    server {
+        listen 80;
+        server_name 192.168.1.47; # server ip or server domain
+
+        location / {
+            proxy_pass http://192.168.49.2:80; # cluster ip or cluster domain
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+
+# Enable the site and restart:
+# Create a symbolic link to the enabled sites directory and restart the service:
+
+    sudo ln -s /etc/nginx/sites-available/reverse-proxy.conf /etc/nginx/sites-enabled/
+    sudo nginx -t (To check for syntax errors)
+    sudo systemctl restart nginx
+
+
+// Download APP Repository (You can use the example app provided in the repository)
+// https://github.com/HanselCF07/authentication_server_example.git
+
+    git clone [url]
+
+
+// To manage environment variables we have many options, from kubernetes, from a previously configured docker image, etc.
+// In this example you can use the example file provided in the app repository and rename it to .env before building the docker image with the Dockerfile.
+
+
+// Run and test App locally (Optional)
+# You can install Python and a virtual environment to run your app locally and test that everything is in place.
+
+
+// Create Docker Image
+# Go to the directory containing your app and the Dockerfile
+# Build the image (Docker slim images by default expose port 8000; use the `--no-cache` command to avoid affecting the image's base configuration)
+    docker build --no-cache -t authentication-server-example:v1 .
+
+# Inspect Docker Img (Optional)
+    docker inspect authentication-server-example:v1 | grep ExposedPorts -A 5
+
+# Run Docker img (Optional)
+    docker run -d -p 5000:5000 authentication-server-example:v1
+
+# Run the container in localhost:8000 and inject environment variables
+# Remember to create a file with the environment variables used in the App Configuration
+    docker run -d -p 5000:5000 --env-file .env authentication-server-example:v1
+
+
+# Test API (Optional)
+    curl -X POST http://<ip-or-domain>:5000/api/v1/authentication/user/login
+
+
+
+// Preparing the Docker Image to be Orchestrated in Pods by Kubernetes:
+
+# Start Minikube (if it is not running)
+    minikube start --driver=docker
+
+# Running the following command will send the images directly to the cluster from your current terminal:
+    eval $(minikube docker-env)
+
+# View images uploaded to minikube
+    minikube image ls
+
+# Upload the image directly to the cluster (without registry)
+    minikube image load authentication-server-example:v1  # If using Minikube
+    
+    kind load docker-image authentication-server-example:v1 # If using Kind
+
+
+
+// Go to the Kubernetes folder inside the app repository and run the following commands:
+
+# Create Deployment and Service
+    kubectl apply -f k8s-deployment.yaml
+    kubectl apply -f k8s-service.yaml
+
+# Configure Ingress
+    kubectl apply -f k8s-ingress.yaml
+
+# Activate Ingress. In Kubernetes, Nginx will be used as the Ingress Controller
+    minikube addons enable ingress
+
+
+# View pods
+    kubectl get pods
+# View services
+    kubectl get svc
+# View ingress
+    kubectl get ingress
+
+
+// DONE! WITH THIS YOU SHOULD BE ABLE TO TEST YOUR APP ORCHESTRATED BY KUBERNETES AND SERVED BY THE NGINX SERVER TO YOUR NETWORK USERS.
+# Remember: 
+# 1. Enable all network ports you use. 
+# 2. Keep in mind the scope of your server, docker, and kubernetes cluster on the network.
+# 3. If using a virtual machine, remember to create a network bridge so your API is visible to other devices on your Local Network.
+
+
+// This command is an alternative if you want to test container orchestration pointing from the local server to the cluster:
+# Port forwarding (Fastest for testing)
+    kubectl port-forward --address 0.0.0.0 service/SERVICE_NAME 5000:5000 (PORT_EXPOSED):(PORT_SERVICE)
+
+# Test API - (Pointing to the cluster, remember it is only accessible on your server and not on your local network)
+    curl -X POST http://<ip-or-domain-cluster>/api/v1/authentication/user/login
+
+
+
+// FOR NOW, IF YOU WANT TO MAKE ANY CHANGES TO YOUR APP (DOCKER IMAGE), I RECOMMEND DOING IT MANUALLY.
+// THIS IS TO FAMILIARIZE YOURSELF WITH THE COMMANDS OF EACH TECHNOLOGY.
+// THE MANUAL PROCESS IS AS FOLLOWS:
+
+# View the ingress created in the kube cluster and delete it.
+    kubectl get ingress
+    kubectl delete ingress/<ingress-name>
+
+# View the service created in the kube cluster and delete it.
+    kubectl get service
+    kubectl delete service/<service-name>
+
+# View the deployment created in the kube cluster and delete it.
+    kubectl get deployment
+    kubectl delete deployment/<deployment-name>
+
+
+// THEN DELETE AND REGENERATE THE DOCKER IMAGE OR SIMPLY UPDATE THE IMAGE BY GENERATING ANOTHER VERSION.
+// REMEMBER THAT TO DELETE A DOCKER IMAGE, YOU MUST FIRST REMOVE THE CONTAINERS USING IT.
+// FINALLY, RELOAD YOUR IMAGE TO THE CLUSTER AND UPDATE THE DEPLOYMENT IF NECESSARY BY CHANGING THE IMAGE NAME.
